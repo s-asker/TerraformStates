@@ -1,5 +1,5 @@
 resource "aws_subnet" "example" {
-  vpc_id            = "subnet-0feb3162043f88376"
+  vpc_id            = "vpc-084b431028ca46aa4"
   cidr_block        = "172.20.1.0/24"
-  availability_zone = "us-east-2a"
+  availability_zone = "us-east-2a"
 }
