@@ -1,0 +1,7 @@
+resource "aws_vpc" "example" {
+  cidr_block = "{{CIDR_BLOCK}}"
+  vpc_id     = "{{RESOURCE_ID}}"
+  tags = {
+    Project = "AnsibleCloudProject"
+  }
+}
