@@ -14,12 +14,14 @@ generate_tf() {
     local details=$2
     local template_file=$3
     local output_file=$4
+    local unique_id=$5  # Add a new argument for the resource name
+
 
     # Debug: Output the template contents before replacement
     echo "Generating $output_file from $template_file with details $details"
 
-    # Replace placeholders in the template with actual values and save to generated files
-    sed -e "$details" "$template_file" > "generated/$output_file"
+    # Replace placeholders in the template with actual values, and replace "example" with unique ID
+    sed -e "$details" -e "s/example/$unique_id/g" "$template_file" > "generated/$output_file"
 }
 
 # Function to automatically import resource into Terraform
@@ -44,13 +46,13 @@ fi
 VPC_CIDR=$(aws ec2 describe-vpcs --vpc-ids $VPC_ID --query 'Vpcs[0].CidrBlock' --output text --region $REGION)
 
 # Generate Terraform configuration for VPC
-generate_tf "vpc" "s|{{CIDR_BLOCK}}|$VPC_CIDR|g" "templates/vpc_template.tf.j2" "aws_vpc_$VPC_ID.tf"
+generate_tf "vpc" "s|{{CIDR_BLOCK}}|$VPC_CIDR|g" "templates/vpc_template.tf.j2" "aws_vpc_$VPC_ID.tf" "$VPC_ID"
 
 # Initialize Terraform in the generated directory
 terraform -chdir=generated init
 
 # Import the VPC into Terraform
-import_resource "aws_vpc" "$VPC_ID" "example"
+import_resource "aws_vpc" "$VPC_ID" "$VPC_ID"
 
 # Get Subnets in the VPC and generate/import Terraform files for each
 SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[*].[SubnetId,CidrBlock,AvailabilityZone]' --output text --region $REGION)
@@ -60,11 +62,12 @@ while read -r SUBNET_ID SUBNET_CIDR AZ; do
 $AZ
 EOF
     )
-    # Generate Terraform configuration for Subnet
-    generate_tf "subnet" "s|{{VPC_ID}}|$VPC_ID|g; s|{{CIDR_BLOCK}}|$SUBNET_CIDR|g; s|{{AVAILABILITY_ZONE}}|$AZ|g" "templates/subnet_template.tf.j2" "aws_subnet_$SUBNET_ID.tf"
+
+    # Generate Terraform configuration for Subnet with a unique name based on Subnet ID
+    generate_tf "subnet" "s|{{VPC_ID}}|$VPC_ID|g; s|{{CIDR_BLOCK}}|$SUBNET_CIDR|g; s|{{AVAILABILITY_ZONE}}|$AZ|g" "templates/subnet_template.tf.j2" "aws_subnet_${SUBNET_ID}.tf" "$SUBNET_ID"
 
     # Import the Subnet into Terraform
-    import_resource "aws_subnet" "$SUBNET_ID" "example"
+    import_resource "aws_subnet" "$SUBNET_ID" "$SUBNET_ID"
 done <<< "$SUBNETS"
 
 # Get Security Groups in the VPC and generate/import Terraform files for each
@@ -75,23 +78,81 @@ while read -r SG_ID SG_NAME SG_DESC; do
 $SG_DESC
 EOF
     )
-    # Generate Terraform configuration for Security Group
-    generate_tf "security_group" "s|{{RESOURCE_ID}}|$SG_ID|g; s|{{GROUP_NAME}}|$SG_NAME|g; s|{{DESCRIPTION}}|$SG_DESC|g" "templates/security_group_template.tf.j2" "aws_security_group_$SG_ID.tf"
+
+    # Generate Terraform configuration for Security Group with a unique name based on Security Group ID
+    generate_tf "security_group" "s|{{RESOURCE_ID}}|$SG_ID|g; s|{{GROUP_NAME}}|$SG_NAME|g; s|{{DESCRIPTION}}|$SG_DESC|g" "templates/security_group_template.tf.j2" "aws_security_group_${SG_ID}.tf" "$SG_ID"
 
     # Import the Security Group into Terraform
-    import_resource "aws_security_group" "$SG_ID" "example"
+    import_resource "aws_security_group" "$SG_ID" "$SG_ID"
 done <<< "$SGS"
 
 # Get EC2 Instances in the VPC and generate/import Terraform files for each
 INSTANCES=$(aws ec2 describe-instances --filters "Name=vpc-id,Values=$VPC_ID" --query 'Reservations[*].Instances[*].[InstanceId,InstanceType,PrivateIpAddress,SubnetId,ImageId]' --output text --region $REGION)
 while read -r INSTANCE_ID INSTANCE_TYPE PRIVATE_IP SUBNET_ID AMI_ID; do
-    # Generate Terraform configuration for EC2 instance
+    # Generate Terraform configuration for EC2 instance with a unique name based on Instance ID
     echo "AMI ID: $AMI_ID"
-    generate_tf "instance" "s|{{AMI_ID}}|$AMI_ID|g; s|{{INSTANCE_TYPE}}|$INSTANCE_TYPE|g; s|{{PRIVATE_IP}}|$PRIVATE_IP|g; s|{{SUBNET_ID}}|$SUBNET_ID|g" "templates/instance_template.tf.j2" "aws_instance_$INSTANCE_ID.tf"
+    AMI_ID=$(cat <<- EOF
+$AMI_ID
+EOF
+    )
+    generate_tf "instance" "s|{{AMI_ID}}|$AMI_ID|g; s|{{INSTANCE_TYPE}}|$INSTANCE_TYPE|g; s|{{PRIVATE_IP}}|$PRIVATE_IP|g; s|{{SUBNET_ID}}|$SUBNET_ID|g" "templates/instance_template.tf.j2" "aws_instance_${INSTANCE_ID}.tf" "$INSTANCE_ID"
 
     # Import the EC2 Instance into Terraform
-    import_resource "aws_instance" "$INSTANCE_ID" "example"
+    import_resource "aws_instance" "$INSTANCE_ID" "$INSTANCE_ID"
 done <<< "$INSTANCES"
+
+# Get Internet Gateways in the VPC and generate/import Terraform files for each
+IGWS=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" --query 'InternetGateways[*].InternetGatewayId' --output text --region $REGION)
+while read -r IGW_ID; do
+    # Generate Terraform configuration for Internet Gateway with a unique name based on IGW ID
+    generate_tf "internet_gateway" "s|{{VPC_ID}}|$VPC_ID|g" "templates/internet_gateway_template.tf.j2" "aws_internet_gateway_${IGW_ID}.tf" "$IGW_ID"
+
+    # Import the Internet Gateway into Terraform
+    import_resource "aws_internet_gateway" "$IGW_ID" "$IGW_ID"
+done <<< "$IGWS"
+
+# Get NAT Gateways in the VPC and generate/import Terraform files for each
+#NAT_GWS=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" --query 'NatGateways[*].[NatGatewayId,SubnetId]' --output text --region $REGION)
+#while read -r NAT_GW_ID SUBNET_ID; do
+    # Generate Terraform configuration for NAT Gateway with a unique name based on NAT Gateway ID
+    #generate_tf "nat_gateway" "s|{{NAT_GW_ID}}|$NAT_GW_ID|g; s|{{SUBNET_ID}}|$SUBNET_ID|g" "templates/nat_gateway_template.tf.j2" "aws_nat_gateway_${NAT_GW_ID}.tf" "$NAT_GW_ID"
+
+    # Import the NAT Gateway into Terraform
+    #import_resource "aws_nat_gateway" "$NAT_GW_ID" "$NAT_GW_ID"
+#done <<< "$NAT_GWS"
+
+# Get Load Balancers (ALB and NLB) in the VPC and generate/import Terraform files for each
+LBS=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[*].[LoadBalancerArn,LoadBalancerName,Scheme,Type,VpcId,AvailabilityZones[*].SubnetId]' --output text --region $REGION)
+
+while read -r LB_ARN LB_NAME LB_SCHEME LB_TYPE LB_VPC_ID SUBNETS; do
+    if [[ "$LB_VPC_ID" == "$VPC_ID" ]]; then
+        # Generate Terraform configuration for Load Balancer (ALB or NLB) with a unique name based on Load Balancer ARN
+        if [[ "$LB_SCHEME" == "internal" ]]; then
+            LB_SCHEME = false;
+        else
+            LB_SCHEME = true;
+        fi
+        generate_tf "load_balancer" "s|{{LB_NAME}}|$LB_NAME|g; s|{{SCHEME}}|$LB_SCHEME|g; s|{{TYPE}}|$LB_TYPE|g; s|{{VPC_ID}}|$LB_VPC_ID|g; s|{{SUBNETS}}|$SUBNETS|g" "templates/load_balancer_template.tf.j2" "aws_lb_${LB_NAME}.tf" "$LB_NAME"
+
+        # Import the Load Balancer into Terraform
+        import_resource "aws_lb" "$LB_ARN" "$LB_NAME"
+    fi
+done <<< "$LBS"
+
+# Get Target Groups associated with the VPC and generate/import Terraform files for each
+TGS=$(aws elbv2 describe-target-groups --query 'TargetGroups[*].[TargetGroupArn,TargetGroupName,Protocol,Port,VpcId]' --output text --region $REGION)
+
+while read -r TG_ARN TG_NAME TG_PROTOCOL TG_PORT TG_VPC_ID; do
+    if [[ "$TG_VPC_ID" == "$VPC_ID" ]]; then
+        # Generate Terraform configuration for Target Group with a unique name based on Target Group ARN
+        generate_tf "target_group" "s|{{TG_NAME}}|$TG_NAME|g; s|{{PROTOCOL}}|$TG_PROTOCOL|g; s|{{PORT}}|$TG_PORT|g; s|{{VPC_ID}}|$TG_VPC_ID|g" "templates/target_group_template.tf.j2" "aws_lb_target_group_${TG_NAME}.tf" "$TG_NAME"
+
+        # Import the Target Group into Terraform
+        import_resource "aws_lb_target_group" "$TG_ARN" "$TG_NAME"
+    fi
+done <<< "$TGS"
+
+
 
 echo "Terraform configuration files generated and resources imported."
 

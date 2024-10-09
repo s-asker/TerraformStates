@@ -1,0 +1,4 @@
+resource "aws_nat_gateway" "example" {
+  allocation_id = "{{NAT_GW_ID}}"
+  subnet_id     = "{{SUBNET_ID}}"
+}

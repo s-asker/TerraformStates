@@ -1,0 +1,6 @@
+resource "aws_lb_target_group" "example" {
+  name     = "{{TG_NAME}}"
+  protocol = "{{PROTOCOL}}"
+  port     = {{PORT}}
+  vpc_id   = "{{VPC_ID}}"
+}
