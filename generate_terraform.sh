@@ -131,8 +131,8 @@ echo "$LBS" | while read -r LB_ARN LB_NAME LB_SCHEME LB_TYPE LB_VPC_ID; do
     echo "Here are the subnets: $SUBNETS"  # Added context for clarity
     
     # Convert multi-line SUBNETS into a comma-separated string using paste
-    SUBNETS_COMMA_SEPARATED=$(echo "$SUBNETS" | paste -s -d, -)  # Combine into a single line with commas
-    echo "Here are the subnets as a comma-separated string: $SUBNETS_COMMA_SEPARATED"
+    SUBNETS_COMMA_SEPERATED=$(echo "$SUBNETS" | paste -s -d, -)  # Combine into a single line with commas
+    echo "Here are the subnets as a comma-separated string: $SUBNETS_COMMA_SEPERATED"
     
     # Print the current Load Balancer information for debugging
     echo "Checking LB_VPC_ID: $LB_VPC_ID against VPC_ID: $VPC_ID"
@@ -158,6 +158,27 @@ echo "$LBS" | while read -r LB_ARN LB_NAME LB_SCHEME LB_TYPE LB_VPC_ID; do
         import_resource "aws_lb" "$LB_ARN" "$LB_NAME"
     fi
 done <<< "$LBS"
+
+# Get Route Tables in the VPC and generate/import Terraform files for each
+ROUTE_TABLES=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$VPC_ID" --query 'RouteTables[*].[RouteTableId,VpcId]' --output text --region $REGION)
+while read -r ROUTE_TABLE_ID VPC_ID; do
+    # Generate Terraform configuration for Route Table
+    generate_tf "route_table" "s|{{VPC_ID}}|$VPC_ID|g" "templates/route_table_template.tf.j2" "aws_route_table_${ROUTE_TABLE_ID}.tf" "$ROUTE_TABLE_ID"
+
+    # Import the Route Table into Terraform
+    import_resource "aws_route_table" "$ROUTE_TABLE_ID" "$ROUTE_TABLE_ID"
+
+    # Get routes in the Route Table and generate/import Terraform files for each route
+    ROUTES=$(aws ec2 describe-route-tables --route-table-ids "$ROUTE_TABLE_ID" --query 'RouteTables[0].Routes[*].[DestinationCidrBlock,GatewayId,NatGatewayId,InstanceId,TransitGatewayId]' --output text --region $REGION)
+    while read -r DEST_CIDR GW_ID NAT_GW_ID INSTANCE_ID TGW_ID; do
+        # Generate Terraform configuration for each route
+        generate_tf "route" "s|{{ROUTE_TABLE_ID}}|$ROUTE_TABLE_ID|g; s|{{DESTINATION_CIDR_BLOCK}}|$DEST_CIDR|g; s|{{INTERNET_GATEWAY_ID}}|$GW_ID|g; s|{{NAT_GATEWAY_ID}}|$NAT_GW_ID|g; s|{{INSTANCE_ID}}|$INSTANCE_ID|g; s|{{TRANSIT_GATEWAY_ID}}|$TGW_ID|g" "templates/route_template.tf.j2" "aws_route_${ROUTE_TABLE_ID}_${DEST_CIDR}.tf" "${ROUTE_TABLE_ID}_${DEST_CIDR}"
+
+        # Import each route into Terraform
+        import_resource "aws_route" "${ROUTE_TABLE_ID}_${DEST_CIDR}" "${ROUTE_TABLE_ID}_${DEST_CIDR}"
+    done <<< "$ROUTES"
+done <<< "$ROUTE_TABLES"
+
 
 # Get Target Groups associated with the VPC and generate/import Terraform files for each
 TGS=$(aws elbv2 describe-target-groups --query 'TargetGroups[*].[TargetGroupArn,TargetGroupName,Protocol,Port,VpcId]' --output text --region $REGION)
