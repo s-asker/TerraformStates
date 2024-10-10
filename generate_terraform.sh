@@ -121,6 +121,22 @@ done <<< "$IGWS"
     #import_resource "aws_nat_gateway" "$NAT_GW_ID" "$NAT_GW_ID"
 #done <<< "$NAT_GWS"
 
+# Get Target Groups associated with the VPC and generate/import Terraform files for each
+TGS=$(aws elbv2 describe-target-groups --query 'TargetGroups[*].[TargetGroupArn,TargetGroupName,Protocol,Port,VpcId]' --output text --region $REGION)
+
+while read -r TG_ARN TG_NAME TG_PROTOCOL TG_PORT TG_VPC_ID; do
+    if [[ "$TG_VPC_ID" == "$VPC_ID" ]]; then
+        # Generate Terraform configuration for Target Group with a unique name based on Target Group ARN
+        generate_tf "target_group" "s|{{TG_NAME}}|$TG_NAME|g; s|{{PROTOCOL}}|$TG_PROTOCOL|g; s|{{PORT}}|$TG_PORT|g; s|{{VPC_ID}}|$TG_VPC_ID|g" "templates/target_group_template.tf.j2" "aws_lb_target_group_${TG_NAME}.tf" "$TG_NAME"
+
+        # Import the Target Group into Terraform
+        import_resource "aws_lb_target_group" "$TG_ARN" "$TG_NAME"
+    fi
+done <<< "$TGS"
+
+
+
+
 # Get Load Balancers (ALB and NLB) in the VPC and generate/import Terraform files for each
 LBS=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[*].[LoadBalancerArn,LoadBalancerName,Scheme,Type,VpcId]' --output text --region "$REGION")
 
@@ -159,39 +175,8 @@ echo "$LBS" | while read -r LB_ARN LB_NAME LB_SCHEME LB_TYPE LB_VPC_ID; do
     fi
 done <<< "$LBS"
 
-# Get Route Tables in the VPC and generate/import Terraform files for each
-ROUTE_TABLES=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$VPC_ID" --query 'RouteTables[*].[RouteTableId,VpcId]' --output text --region $REGION)
-while read -r ROUTE_TABLE_ID VPC_ID; do
-    # Generate Terraform configuration for Route Table
-    generate_tf "route_table" "s|{{VPC_ID}}|$VPC_ID|g" "templates/route_table_template.tf.j2" "aws_route_table_${ROUTE_TABLE_ID}.tf" "$ROUTE_TABLE_ID"
-
-    # Import the Route Table into Terraform
-    import_resource "aws_route_table" "$ROUTE_TABLE_ID" "$ROUTE_TABLE_ID"
-
-    # Get routes in the Route Table and generate/import Terraform files for each route
-    ROUTES=$(aws ec2 describe-route-tables --route-table-ids "$ROUTE_TABLE_ID" --query 'RouteTables[0].Routes[*].[DestinationCidrBlock,GatewayId,NatGatewayId,InstanceId,TransitGatewayId]' --output text --region $REGION)
-    while read -r DEST_CIDR GW_ID NAT_GW_ID INSTANCE_ID TGW_ID; do
-        # Generate Terraform configuration for each route
-        generate_tf "route" "s|{{ROUTE_TABLE_ID}}|$ROUTE_TABLE_ID|g; s|{{DESTINATION_CIDR_BLOCK}}|$DEST_CIDR|g; s|{{INTERNET_GATEWAY_ID}}|$GW_ID|g; s|{{NAT_GATEWAY_ID}}|$NAT_GW_ID|g; s|{{INSTANCE_ID}}|$INSTANCE_ID|g; s|{{TRANSIT_GATEWAY_ID}}|$TGW_ID|g" "templates/route_template.tf.j2" "aws_route_${ROUTE_TABLE_ID}_${DEST_CIDR}.tf" "${ROUTE_TABLE_ID}_${DEST_CIDR}"
-
-        # Import each route into Terraform
-        import_resource "aws_route" "${ROUTE_TABLE_ID}_${DEST_CIDR}" "${ROUTE_TABLE_ID}_${DEST_CIDR}"
-    done <<< "$ROUTES"
-done <<< "$ROUTE_TABLES"
 
 
-# Get Target Groups associated with the VPC and generate/import Terraform files for each
-TGS=$(aws elbv2 describe-target-groups --query 'TargetGroups[*].[TargetGroupArn,TargetGroupName,Protocol,Port,VpcId]' --output text --region $REGION)
-
-while read -r TG_ARN TG_NAME TG_PROTOCOL TG_PORT TG_VPC_ID; do
-    if [[ "$TG_VPC_ID" == "$VPC_ID" ]]; then
-        # Generate Terraform configuration for Target Group with a unique name based on Target Group ARN
-        generate_tf "target_group" "s|{{TG_NAME}}|$TG_NAME|g; s|{{PROTOCOL}}|$TG_PROTOCOL|g; s|{{PORT}}|$TG_PORT|g; s|{{VPC_ID}}|$TG_VPC_ID|g" "templates/target_group_template.tf.j2" "aws_lb_target_group_${TG_NAME}.tf" "$TG_NAME"
-
-        # Import the Target Group into Terraform
-        import_resource "aws_lb_target_group" "$TG_ARN" "$TG_NAME"
-    fi
-done <<< "$TGS"
 
 
 
