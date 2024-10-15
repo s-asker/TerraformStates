@@ -168,7 +168,17 @@ LBS=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[*].[LoadBalancerA
 
 # Use a while loop to read each line of Load Balancer info
 echo "$LBS" | while read -r LB_ARN LB_NAME LB_SCHEME LB_TYPE LB_VPC_ID; do  
-    
+    # Get subnets for the load balancer
+    SUBNETS=$(aws elbv2 describe-load-balancers --load-balancer-arns "$LB_ARN" \
+        --query 'LoadBalancers[0].AvailabilityZones[*].SubnetId' --output text --region "$REGION")
+
+    echo "Here are the subnets: $SUBNETS"  # Debugging output
+
+    # Clean and convert to comma-separated string by removing extra spaces/tabs
+    SUBNETS_COMMA_SEPERATED=$(echo "$SUBNETS" | tr -s '[:space:]' ',' | sed 's/,$//')
+
+    echo "Here are the subnets as a comma-separated string: $SUBNETS_COMMA_SEPERATED"
+
     # If the VPC IDs match, process the Load Balancer
     if [[ "$LB_VPC_ID" == "$VPC_ID" ]]; then
         echo "Match found for LB_NAME: $LB_NAME"
@@ -182,7 +192,7 @@ echo "$LBS" | while read -r LB_ARN LB_NAME LB_SCHEME LB_TYPE LB_VPC_ID; do
         fi
 
         # Generate Terraform configuration
-        if ! generate_tf "load_balancer" "s|{{LB_NAME}}|$LB_NAME|g; s|{{SCHEME}}|$LB_SCHEME|g; s|{{TYPE}}|$LB_TYPE|g" "templates/load_balancer_template.tf.j2" "aws_lb_${LB_NAME}.tf" "$LB_NAME"; then
+        if ! generate_tf "load_balancer" "s|{{LB_NAME}}|$LB_NAME|g; s|{{SCHEME}}|$LB_SCHEME|g; s|{{TYPE}}|$LB_TYPE|g; s|{{VPC_ID}}|$LB_VPC_ID|g; s|{{SUBNETS}}|$SUBNETS_COMMA_SEPERATED|g" "templates/load_balancer_template.tf.j2" "aws_lb_${LB_NAME}.tf" "$LB_NAME"; then
             echo "Failed to generate TF for $LB_NAME"
         fi
         
