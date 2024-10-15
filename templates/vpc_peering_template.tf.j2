@@ -1,0 +1,5 @@
+resource "aws_vpc_peering_connection" "example" {
+  peer_owner_id = {{OWNER}}
+  peer_vpc_id   = {{PEER}}
+  vpc_id        = {{VPC_ID}}
+}

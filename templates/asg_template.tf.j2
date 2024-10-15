@@ -1,0 +1,10 @@
+﻿resource "aws_autoscaling_group" "example" {
+  desired_capacity   = {{DESIRED}}
+  max_size           = {{MAX}}
+  min_size           = {{MIN}}
+
+  launch_template {
+    id      = {{LT_ID}}
+    version = {{LATEST}}
+  }
+}

@@ -174,6 +174,49 @@ echo "$LBS" | while read -r LB_ARN LB_NAME LB_SCHEME LB_TYPE LB_VPC_ID; do
         import_resource "aws_lb" "$LB_ARN" "$LB_NAME"
     fi
 done <<< "$LBS"
+# Get Auto Scaling Groups in the VPC and generate/import Terraform files for each
+ASGS=$(aws autoscaling describe-auto-scaling-groups --query 'AutoScalingGroups[*].[AutoScalingGroupName,DesiredCapacity,MaxSize,MinSize,LaunchTemplate.LaunchTemplateId,LaunchTemplate.Version]' --output text --region "$REGION")
+while read -r ASG_NAME DESIRED_CAPACITY MAX_SIZE MIN_SIZE LT_ID LT_VERSION; do
+
+    # Check if Launch Template ID and Version exist
+    if [[ -n "$LT_ID" && -n "$LT_VERSION" ]]; then
+        echo "Processing Auto Scaling Group: $ASG_NAME with Launch Template ID: $LT_ID and Version: $LT_VERSION"
+
+        # Generate Terraform configuration for Auto Scaling Group
+        generate_tf "autoscaling_group" \
+            "s|{{DESIRED}}|$DESIRED_CAPACITY|g; s|{{MAX}}|$MAX_SIZE|g; s|{{MIN}}|$MIN_SIZE|g; s|{{LT_ID}}|$LT_ID|g; s|{{LATEST}}|$LT_VERSION|g" \
+            "templates/asg_template.tf.j2" \
+            "aws_autoscaling_group_${ASG_NAME}.tf" "$ASG_NAME"
+
+        # Import the Auto Scaling Group into Terraform
+        import_resource "aws_autoscaling_group" "$ASG_NAME" "$ASG_NAME"
+    else
+        echo "Skipping Auto Scaling Group: $ASG_NAME (missing Launch Template information)"
+    fi
+done <<< "$ASGS"
+
+# Get VPC Peering Connections and generate/import Terraform files for each
+VPC_PEERINGS=$(aws ec2 describe-vpc-peering-connections --query 'VpcPeeringConnections[*].[VpcPeeringConnectionId,RequesterVpcInfo.VpcId,RequesterVpcInfo.OwnerId,AccepterVpcInfo.VpcId]' --output text --region "$REGION")
+while read -r PEERING_ID REQUESTER_VPC_ID OWNER_ID PEER_VPC_ID; do
+
+    # Check if necessary VPC peering details exist
+    if [[ -n "$REQUESTER_VPC_ID" && -n "$OWNER_ID" && -n "$PEER_VPC_ID" ]]; then
+        echo "Processing VPC Peering Connection: $PEERING_ID"
+
+        # Generate Terraform configuration for VPC Peering Connection
+        generate_tf "vpc_peering_connection" \
+            "s|{{OWNER}}|$OWNER_ID|g; s|{{PEER}}|$PEER_VPC_ID|g; s|{{VPC_ID}}|$REQUESTER_VPC_ID|g" \
+            "templates/vpc_peering_template.tf.j2" \
+            "aws_vpc_peering_connection_${PEERING_ID}.tf" "$PEERING_ID"
+
+        # Import the VPC Peering Connection into Terraform
+        import_resource "aws_vpc_peering_connection" "$PEERING_ID" "$PEERING_ID"
+    else
+        echo "Skipping VPC Peering Connection: $PEERING_ID (missing details)"
+    fi
+done <<< "$VPC_PEERINGS"
+
+
 
 
 
