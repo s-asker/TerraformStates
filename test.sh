@@ -19,7 +19,8 @@ echo "$LBS" | while read -r LB_ARN LB_NAME LB_SCHEME LB_TYPE LB_VPC_ID; do
 
     # Clean and convert to comma-separated string by removing extra spaces/tabs
     SUBNETS_COMMA_SEPARATED=$(echo "$SUBNETS" | tr -s '[:space:]' ',' | sed 's/,$//')
+    SUBNETS_TF_STRING=$(echo "\"$(echo $SUBNETS_COMMA_SEPARATED | sed 's/,/","/g')\"")
 
-    echo "Here are the subnets as a comma-separated string: $SUBNETS_COMMA_SEPARATED"
+    echo "Here are the subnets as a comma-separated string: $SUBNETS_TF_STRING"
 done
 

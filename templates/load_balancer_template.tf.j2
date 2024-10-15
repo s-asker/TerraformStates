@@ -1,6 +1,6 @@
 resource "aws_lb" "example" {
   name               = "{{LB_NAME}}"
   load_balancer_type = "{{TYPE}}"
-  internal           = "{{SCHEME}}"
-  subnets            = "[{SUBNETS}]"
+  internal           = {{SCHEME}}
+  subnets            = [{{SUBNETS}}]
 }
