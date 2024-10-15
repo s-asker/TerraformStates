@@ -71,35 +71,39 @@ EOF
 done <<< "$SUBNETS"
 
 # Get Security Groups in the VPC and generate/import Terraform files for each
-SGS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[*].[GroupId,GroupName,Description]' --output text --region $REGION)
-while read -r SG_ID SG_NAME SG_DESC; do
+SGS=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[*].[GroupId,GroupName,VpcId,Description]' --output text --region $REGION)
+while read -r SG_ID SG_NAME SG_VPC_ID SG_DESC; do
     # Use heredoc to handle multi-line Security Group Description
     SG_DESC=$(cat <<- EOF
 $SG_DESC
 EOF
     )
+    SG_VPC_ID=$(cat <<- EOF
+$SG_VPC_ID
+EOF
+    )
 
     # Generate Terraform configuration for Security Group with a unique name based on Security Group ID
-    generate_tf "security_group" "s|{{RESOURCE_ID}}|$SG_ID|g; s|{{GROUP_NAME}}|$SG_NAME|g; s|{{DESCRIPTION}}|$SG_DESC|g" "templates/security_group_template.tf.j2" "aws_security_group_${SG_ID}.tf" "$SG_ID"
+    generate_tf "security_group" "s|{{RESOURCE_ID}}|$SG_VPC_ID|g; s|{{GROUP_NAME}}|$SG_NAME|g; s|{{DESCRIPTION}}|$SG_DESC|g" "templates/security_group_template.tf.j2" "aws_security_group_${SG_ID}.tf" "$SG_ID"
 
     # Import the Security Group into Terraform
     import_resource "aws_security_group" "$SG_ID" "$SG_ID"
 done <<< "$SGS"
 
-# Get EC2 Instances in the VPC and generate/import Terraform files for each
-INSTANCES=$(aws ec2 describe-instances --filters "Name=vpc-id,Values=$VPC_ID" --query 'Reservations[*].Instances[*].[InstanceId,InstanceType,PrivateIpAddress,SubnetId,ImageId]' --output text --region $REGION)
-while read -r INSTANCE_ID INSTANCE_TYPE PRIVATE_IP SUBNET_ID AMI_ID; do
-    # Generate Terraform configuration for EC2 instance with a unique name based on Instance ID
-    echo "AMI ID: $AMI_ID"
-    AMI_ID=$(cat <<- EOF
-$AMI_ID
-EOF
-    )
-    generate_tf "instance" "s|{{AMI_ID}}|$AMI_ID|g; s|{{INSTANCE_TYPE}}|$INSTANCE_TYPE|g; s|{{PRIVATE_IP}}|$PRIVATE_IP|g; s|{{SUBNET_ID}}|$SUBNET_ID|g" "templates/instance_template.tf.j2" "aws_instance_${INSTANCE_ID}.tf" "$INSTANCE_ID"
+# # Get EC2 Instances in the VPC and generate/import Terraform files for each
+# INSTANCES=$(aws ec2 describe-instances --filters "Name=vpc-id,Values=$VPC_ID" --query 'Reservations[*].Instances[*].[InstanceId,InstanceType,PrivateIpAddress,SubnetId,ImageId]' --output text --region $REGION)
+# while read -r INSTANCE_ID INSTANCE_TYPE PRIVATE_IP SUBNET_ID AMI_ID; do
+#     # Generate Terraform configuration for EC2 instance with a unique name based on Instance ID
+#     echo "AMI ID: $AMI_ID"
+#     AMI_ID=$(cat <<- EOF
+# $AMI_ID
+# EOF
+#     )
+#     generate_tf "instance" "s|{{AMI_ID}}|$AMI_ID|g; s|{{INSTANCE_TYPE}}|$INSTANCE_TYPE|g; s|{{PRIVATE_IP}}|$PRIVATE_IP|g; s|{{SUBNET_ID}}|$SUBNET_ID|g" "templates/instance_template.tf.j2" "aws_instance_${INSTANCE_ID}.tf" "$INSTANCE_ID"
 
-    # Import the EC2 Instance into Terraform
-    import_resource "aws_instance" "$INSTANCE_ID" "$INSTANCE_ID"
-done <<< "$INSTANCES"
+#     # Import the EC2 Instance into Terraform
+#     import_resource "aws_instance" "$INSTANCE_ID" "$INSTANCE_ID"
+# done <<< "$INSTANCES"
 
 # Get Internet Gateways in the VPC and generate/import Terraform files for each
 IGWS=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" --query 'InternetGateways[*].InternetGatewayId' --output text --region $REGION)
@@ -122,15 +126,37 @@ done <<< "$IGWS"
 #done <<< "$NAT_GWS"
 
 # Get Target Groups associated with the VPC and generate/import Terraform files for each
-TGS=$(aws elbv2 describe-target-groups --query 'TargetGroups[*].[TargetGroupArn,TargetGroupName,Protocol,Port,VpcId]' --output text --region $REGION)
+TGS=$(aws elbv2 describe-target-groups --query 'TargetGroups[*].[TargetGroupArn,TargetGroupName,Protocol,Port,VpcId]' --output text --region "$REGION")
 
 while read -r TG_ARN TG_NAME TG_PROTOCOL TG_PORT TG_VPC_ID; do
     if [[ "$TG_VPC_ID" == "$VPC_ID" ]]; then
-        # Generate Terraform configuration for Target Group with a unique name based on Target Group ARN
+        echo "Processing Target Group: $TG_NAME with ARN: $TG_ARN"
+
+        # Generate Terraform configuration for Target Group
         generate_tf "target_group" "s|{{TG_NAME}}|$TG_NAME|g; s|{{PROTOCOL}}|$TG_PROTOCOL|g; s|{{PORT}}|$TG_PORT|g; s|{{VPC_ID}}|$TG_VPC_ID|g" "templates/target_group_template.tf.j2" "aws_lb_target_group_${TG_NAME}.tf" "$TG_NAME"
 
         # Import the Target Group into Terraform
         import_resource "aws_lb_target_group" "$TG_ARN" "$TG_NAME"
+
+        # Now, find ASGs associated with this Target Group
+        ASGS=$(aws autoscaling describe-auto-scaling-groups --query "AutoScalingGroups[?contains(TargetGroupARNs, '$TG_ARN')].[AutoScalingGroupName,DesiredCapacity,MaxSize,MinSize,LaunchTemplate.LaunchTemplateId,LaunchTemplate.Version]" --output text --region "$REGION")
+
+        while read -r ASG_NAME DESIRED_CAPACITY MAX_SIZE MIN_SIZE LT_ID LT_VERSION; do
+            if [[ -n "$LT_ID" && -n "$LT_VERSION" ]]; then
+                echo "Processing Auto Scaling Group: $ASG_NAME with Launch Template ID: $LT_ID and Version: $LT_VERSION"
+                
+                # Generate Terraform configuration for ASG
+                generate_tf "autoscaling_group" \
+                    "s|{{DESIRED}}|$DESIRED_CAPACITY|g; s|{{MAX}}|$MAX_SIZE|g; s|{{MIN}}|$MIN_SIZE|g; s|{{LT_ID}}|$LT_ID|g; s|{{LATEST}}|$LT_VERSION|g" \
+                    "templates/asg_template.tf.j2" \
+                    "aws_autoscaling_group_${ASG_NAME}.tf" "$ASG_NAME"
+
+                # Import the Auto Scaling Group into Terraform
+                import_resource "aws_autoscaling_group" "$ASG_NAME" "$ASG_NAME"
+            else
+                echo "Skipping Auto Scaling Group: $ASG_NAME (missing Launch Template information)"
+            fi
+        done <<< "$ASGS"
     fi
 done <<< "$TGS"
 
@@ -141,32 +167,22 @@ done <<< "$TGS"
 LBS=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[*].[LoadBalancerArn,LoadBalancerName,Scheme,Type,VpcId]' --output text --region "$REGION")
 
 # Use a while loop to read each line of Load Balancer info
-echo "$LBS" | while read -r LB_ARN LB_NAME LB_SCHEME LB_TYPE LB_VPC_ID; do
-    # Get subnets separately for this Load Balancer
-    SUBNETS=$(aws elbv2 describe-load-balancers --load-balancer-arns "$LB_ARN" --query 'LoadBalancers[0].AvailabilityZones[*].SubnetId' --output text --region "$REGION")
-    echo "Here are the subnets: $SUBNETS"  # Added context for clarity
-    
-    # Convert multi-line SUBNETS into a comma-separated string using paste
-    SUBNETS_COMMA_SEPERATED=$(echo "$SUBNETS" | paste -s -d, -)  # Combine into a single line with commas
-    echo "Here are the subnets as a comma-separated string: $SUBNETS_COMMA_SEPERATED"
-    
-    # Print the current Load Balancer information for debugging
-    echo "Checking LB_VPC_ID: $LB_VPC_ID against VPC_ID: $VPC_ID"
+echo "$LBS" | while read -r LB_ARN LB_NAME LB_SCHEME LB_TYPE LB_VPC_ID; do  
     
     # If the VPC IDs match, process the Load Balancer
     if [[ "$LB_VPC_ID" == "$VPC_ID" ]]; then
         echo "Match found for LB_NAME: $LB_NAME"
-        echo "LB_ARN: $LB_ARN, LB_NAME: $LB_NAME, LB_SCHEME: $LB_SCHEME, LB_TYPE: $LB_TYPE, LB_VPC_ID: $LB_VPC_ID, SUBNETS: $SUBNETS_COMMA_SEPARATED"
+        echo "LB_ARN: $LB_ARN, LB_NAME: $LB_NAME, LB_SCHEME: $LB_SCHEME, LB_TYPE: $LB_TYPE, LB_VPC_ID: $LB_VPC_ID"
 
         # Determine Load Balancer scheme (internal/external)
         if [[ "$LB_SCHEME" == "internal" ]]; then
-            LB_SCHEME=false
-        else
             LB_SCHEME=true
+        else
+            LB_SCHEME=false
         fi
 
         # Generate Terraform configuration
-        if ! generate_tf "load_balancer" "s|{{LB_NAME}}|$LB_NAME|g; s|{{SCHEME}}|$LB_SCHEME|g; s|{{TYPE}}|$LB_TYPE|g; s|{{VPC_ID}}|$LB_VPC_ID|g; s|{{SUBNETS}}|$SUBNETS_COMMA_SEPARATED|g" "templates/load_balancer_template.tf.j2" "aws_lb_${LB_NAME}.tf" "$LB_NAME"; then
+        if ! generate_tf "load_balancer" "s|{{LB_NAME}}|$LB_NAME|g; s|{{SCHEME}}|$LB_SCHEME|g; s|{{TYPE}}|$LB_TYPE|g" "templates/load_balancer_template.tf.j2" "aws_lb_${LB_NAME}.tf" "$LB_NAME"; then
             echo "Failed to generate TF for $LB_NAME"
         fi
         
@@ -174,49 +190,24 @@ echo "$LBS" | while read -r LB_ARN LB_NAME LB_SCHEME LB_TYPE LB_VPC_ID; do
         import_resource "aws_lb" "$LB_ARN" "$LB_NAME"
     fi
 done <<< "$LBS"
-# Get Auto Scaling Groups in the VPC and generate/import Terraform files for each
-ASGS=$(aws autoscaling describe-auto-scaling-groups --query 'AutoScalingGroups[*].[AutoScalingGroupName,DesiredCapacity,MaxSize,MinSize,LaunchTemplate.LaunchTemplateId,LaunchTemplate.Version]' --output text --region "$REGION")
-while read -r ASG_NAME DESIRED_CAPACITY MAX_SIZE MIN_SIZE LT_ID LT_VERSION; do
 
-    # Check if Launch Template ID and Version exist
-    if [[ -n "$LT_ID" && -n "$LT_VERSION" ]]; then
-        echo "Processing Auto Scaling Group: $ASG_NAME with Launch Template ID: $LT_ID and Version: $LT_VERSION"
+# Get VPC Peering Connections filtered by VPC ID
+VPC_PEERINGS=$(aws ec2 describe-vpc-peering-connections \
+    --query "VpcPeeringConnections[?RequesterVpcInfo.VpcId=='$VPC_ID' || AccepterVpcInfo.VpcId=='$VPC_ID'].[VpcPeeringConnectionId,RequesterVpcInfo.VpcId,RequesterVpcInfo.OwnerId,AccepterVpcInfo.VpcId]" \
+    --output text --region "$REGION")
 
-        # Generate Terraform configuration for Auto Scaling Group
-        generate_tf "autoscaling_group" \
-            "s|{{DESIRED}}|$DESIRED_CAPACITY|g; s|{{MAX}}|$MAX_SIZE|g; s|{{MIN}}|$MIN_SIZE|g; s|{{LT_ID}}|$LT_ID|g; s|{{LATEST}}|$LT_VERSION|g" \
-            "templates/asg_template.tf.j2" \
-            "aws_autoscaling_group_${ASG_NAME}.tf" "$ASG_NAME"
-
-        # Import the Auto Scaling Group into Terraform
-        import_resource "aws_autoscaling_group" "$ASG_NAME" "$ASG_NAME"
-    else
-        echo "Skipping Auto Scaling Group: $ASG_NAME (missing Launch Template information)"
-    fi
-done <<< "$ASGS"
-
-# Get VPC Peering Connections and generate/import Terraform files for each
-VPC_PEERINGS=$(aws ec2 describe-vpc-peering-connections --query 'VpcPeeringConnections[*].[VpcPeeringConnectionId,RequesterVpcInfo.VpcId,RequesterVpcInfo.OwnerId,AccepterVpcInfo.VpcId]' --output text --region "$REGION")
 while read -r PEERING_ID REQUESTER_VPC_ID OWNER_ID PEER_VPC_ID; do
-
-    # Check if necessary VPC peering details exist
     if [[ -n "$REQUESTER_VPC_ID" && -n "$OWNER_ID" && -n "$PEER_VPC_ID" ]]; then
         echo "Processing VPC Peering Connection: $PEERING_ID"
-
-        # Generate Terraform configuration for VPC Peering Connection
         generate_tf "vpc_peering_connection" \
             "s|{{OWNER}}|$OWNER_ID|g; s|{{PEER}}|$PEER_VPC_ID|g; s|{{VPC_ID}}|$REQUESTER_VPC_ID|g" \
             "templates/vpc_peering_template.tf.j2" \
             "aws_vpc_peering_connection_${PEERING_ID}.tf" "$PEERING_ID"
-
-        # Import the VPC Peering Connection into Terraform
         import_resource "aws_vpc_peering_connection" "$PEERING_ID" "$PEERING_ID"
     else
         echo "Skipping VPC Peering Connection: $PEERING_ID (missing details)"
     fi
 done <<< "$VPC_PEERINGS"
-
-
 
 
 
