@@ -221,11 +221,11 @@ while read -r PEERING_ID REQUESTER_VPC_ID OWNER_ID PEER_VPC_ID; do
 done <<< "$VPC_PEERINGS"
 
 ROUTING_TABLES=$(aws ec2 describe-route-tables \
-    --query "RouteTables[?VpcId=='$VPC_ID'].[RouteTableId,VpcId,Routes]" \
+    --query "RouteTables[?VpcId=='$VPC_ID'].[RouteTableId,VpcId]" \
     --output text --region "$REGION")
 
 # Iterate over each routing table entry and generate Terraform files
-while read -r ROUTE_TABLE_ID VPC_ID ROUTES; do
+while read -r ROUTE_TABLE_ID VPC_ID; do
     if [[ -n "$ROUTE_TABLE_ID" && -n "$VPC_ID" ]]; then
         echo "Processing Routing Table: $ROUTE_TABLE_ID"
 
