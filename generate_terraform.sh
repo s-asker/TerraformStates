@@ -220,6 +220,28 @@ while read -r PEERING_ID REQUESTER_VPC_ID OWNER_ID PEER_VPC_ID; do
     fi
 done <<< "$VPC_PEERINGS"
 
+ROUTING_TABLES=$(aws ec2 describe-route-tables \
+    --query "RouteTables[?VpcId=='$VPC_ID'].[RouteTableId,VpcId,Routes]" \
+    --output text --region "$REGION")
+
+# Iterate over each routing table entry and generate Terraform files
+while read -r ROUTE_TABLE_ID VPC_ID ROUTES; do
+    if [[ -n "$ROUTE_TABLE_ID" && -n "$VPC_ID" ]]; then
+        echo "Processing Routing Table: $ROUTE_TABLE_ID"
+
+        # Generate Terraform configuration from template
+        generate_tf "route_table" \
+            "s|{{VPC_ID}}|$VPC_ID|g" \
+            "templates/route_table_template.tf.j2" \
+            "aws_route_table_${ROUTE_TABLE_ID}.tf" "$ROUTE_TABLE_ID"
+
+        # Import the routing table into Terraform state
+        import_resource "aws_route_table" "$ROUTE_TABLE_ID" "$ROUTE_TABLE_ID"
+    else
+        echo "Skipping Routing Table: $ROUTE_TABLE_ID (missing details)"
+    fi
+done <<< "$ROUTING_TABLES"
+
 
 
 
