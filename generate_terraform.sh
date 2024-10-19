@@ -228,7 +228,10 @@ ROUTING_TABLES=$(aws ec2 describe-route-tables \
 while read -r ROUTE_TABLE_ID VPC_ID; do
     if [[ -n "$ROUTE_TABLE_ID" && -n "$VPC_ID" ]]; then
         echo "Processing Routing Table: $ROUTE_TABLE_ID"
-
+    VPC_ID=$(cat <<- EOF
+$VPC_ID
+EOF
+    )
         # Generate Terraform configuration from template
         generate_tf "route_table" \
             "s|{{VPC_ID}}|$VPC_ID|g" \
